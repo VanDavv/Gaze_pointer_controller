@@ -96,7 +96,6 @@ It might be interesting to find a way to do a "parallel" loading.
 
 Finally, we get the best result using several devices (using the two faster: GPU and CPU, with mixed precision of FP16 and INT8).
 
-## Stand Out Suggestions
 
 ### Async Inference
 
