@@ -1,4 +1,4 @@
-# (Gaze Estimation for) Computer Pointer Controller
+# Gaze Estimation
 
 ![Alt Text](results/gif_gaze2.gif)
 
