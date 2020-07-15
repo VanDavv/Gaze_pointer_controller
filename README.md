@@ -10,10 +10,10 @@ This project involves using a gaze detection model to control the computer mouse
 The project need Intel's OpenVino ToolKit to be installed (version 2020.3 LTS).
 Also required are the three pretrained models needed as an input pipeline for the gaze estimation model:
 * Face detection model : face-detection-retail-0004
-* Head pose estimation model :
-* Face landmark detection model :
+* Head pose estimation model : head-pose-estimation-adas-0001
+* Face landmark detection model : landmarks-regression-retail-0009
 
-And finally the gaze estimation model, itself:
+And finally the gaze estimation model, itself:gaze-estimation-adas-0002
 
 The "model downloader" could be used to download the models:
 e.g. `python /opt/intel/openvino/deployment_tools/tools/model_downloader/downloader.py --name face-detection-retail-0004`
@@ -42,10 +42,10 @@ Change the directory to project directory and run main.py with the required argu
 ## Documentation
 
 **Openvino documentation of the models:**
-* **Face Detection Model**: [face-detection-retail-0004](https://docs.openvinotoolkit.org/latest/_models_intel_face_detection_retail_0004_description_face_detection_retail_0004.html)
-* **Facial Landmarks Detection Model**: [landmarks-regression-retail-0009](https://docs.openvinotoolkit.org/latest/_models_intel_landmarks_regression_retail_0009_description_landmarks_regression_retail_0009.html)
-* **Head Pose Estimation Model**: [head-pose-estimation-adas-0001](https://docs.openvinotoolkit.org/latest/_models_intel_head_pose_estimation_adas_0001_description_head_pose_estimation_adas_0001.html)
-* **Gaze Estimation Model**: [gaze-estimation-adas-0002](https://docs.openvinotoolkit.org/latest/_models_intel_gaze_estimation_adas_0002_description_gaze_estimation_adas_0002.html)
+* [face-detection-retail-0004](https://docs.openvinotoolkit.org/latest/_models_intel_face_detection_retail_0004_description_face_detection_retail_0004.html)
+* [landmarks-regression-retail-0009](https://docs.openvinotoolkit.org/latest/_models_intel_landmarks_regression_retail_0009_description_landmarks_regression_retail_0009.html)
+* [head-pose-estimation-adas-0001](https://docs.openvinotoolkit.org/latest/_models_intel_head_pose_estimation_adas_0001_description_head_pose_estimation_adas_0001.html)
+* [gaze-estimation-adas-0002](https://docs.openvinotoolkit.org/latest/_models_intel_gaze_estimation_adas_0002_description_gaze_estimation_adas_0002.html)
 
 
 **Command line arguments:**
