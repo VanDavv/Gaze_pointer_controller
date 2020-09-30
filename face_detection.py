@@ -1,14 +1,16 @@
 import time
+from pathlib import Path
+
 from openvino.inference_engine import IENetwork, IECore
 import cv2
 
 
 class FaceDetection:
-    def __init__(self, model_name):
-        self.model_weights = model_name + '.bin'
-        self.model_structure = model_name + '.xml'
+    def __init__(self):
+        self.model_weights = Path("models/face-detection-retail-0004/face-detection-retail-0004.bin").resolve().absolute()
+        self.model_structure = self.model_weights.with_suffix('.xml')
 
-        self.model = IENetwork(self.model_structure, self.model_weights)
+        self.model = IENetwork(str(self.model_structure), str(self.model_weights))
 
         self.input_name = next(iter(self.model.inputs))
         self.input_shape = self.model.inputs[self.input_name].shape
@@ -16,7 +18,7 @@ class FaceDetection:
         self.output_shape = self.model.outputs[self.output_name].shape
 
     def load_model(self, ie):
-        self.net = ie.read_network(model=self.model_structure, weights=self.model_weights)
+        self.net = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
         self.exec_net = ie.load_network(network=self.net, num_requests=0, device_name="MYRIAD")
         self.input_blob = next(iter(self.exec_net.inputs))
         self.output_blob = next(iter(self.exec_net.outputs))

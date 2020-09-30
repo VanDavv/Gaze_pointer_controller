@@ -1,14 +1,16 @@
+from pathlib import Path
+
 import cv2
 import time
 
 
 class LandmarkDetection:
-    def __init__(self, model_name):
-        self.model_weights = model_name + '.bin'
-        self.model_structure = model_name + '.xml'
+    def __init__(self):
+        self.model_weights = Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009.bin").resolve().absolute()
+        self.model_structure = self.model_weights.with_suffix('.xml')
 
     def load_model(self, ie):
-        self.net2 = ie.read_network(model=self.model_structure, weights=self.model_weights)
+        self.net2 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
         self.exec_net = ie.load_network(network=self.net2, num_requests=0, device_name="MYRIAD")
         self.input_name = next(iter(self.exec_net.inputs))
         self.input_shape = self.exec_net.inputs[self.input_name].shape

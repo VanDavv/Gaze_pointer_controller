@@ -11,20 +11,15 @@ from gaze_estimation import GazeEstimation
 
 
 def main():
-    model_fd = str(Path("models/face-detection-retail-0004/face-detection-retail-0004").resolve().absolute())
-    model_hp = str(Path("models/head-pose-estimation-adas-0001/head-pose-estimation-adas-0001").resolve().absolute())
-    model_ld = str(Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009").resolve().absolute())
-    model_ge = str(Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002").resolve().absolute())
-
     video_file = str(Path("demo.mp4").resolve().absolute())
 
     log.info("Creating fd Inference Engine...")
     ie = IECore()
 
-    fd = FaceDetection(model_fd)
-    hp = HeadPose(model_hp)
-    ld = LandmarkDetection(model_ld)
-    ge = GazeEstimation(model_ge)
+    fd = FaceDetection()
+    hp = HeadPose()
+    ld = LandmarkDetection()
+    ge = GazeEstimation()
 
     fd.load_model(ie)
     hp.load_model(ie)

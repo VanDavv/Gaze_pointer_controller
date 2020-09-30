@@ -1,16 +1,18 @@
 import time
+from pathlib import Path
+
 import cv2
 
 
 class GazeEstimation:
-    def __init__(self, model_name):
-        self.model_weights = model_name + '.bin'
-        self.model_structure = model_name + '.xml'
+    def __init__(self):
+        self.model_weights = Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002.bin").resolve().absolute()
+        self.model_structure = self.model_weights.with_suffix('.xml')
         self.initial_w = None
         self.initial_h = None
 
     def load_model(self, ie):
-        self.net4 = ie.read_network(model=self.model_structure, weights=self.model_weights)
+        self.net4 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
         self.exec_net = ie.load_network(network=self.net4, num_requests=0, device_name="MYRIAD")
         self.input_name = next(iter(self.exec_net.inputs))
         self.input_shape = self.exec_net.inputs['left_eye_image'].shape
