@@ -1,6 +1,8 @@
 
 import os
 import time
+from pathlib import Path
+
 import cv2
 
 import logging as log
@@ -19,31 +21,13 @@ def build_argparser():
     :return: command line arguments
     """
     parser = ArgumentParser()
-    parser.add_argument("-mfd", "--model_fd", required=True, type=str,
-                        help="Path to the face detection model file without extension (e.g. path/model_name).")
-    parser.add_argument("-mhp", "--model_hp", required=True, type=str,
-                        help="Path to the head pose model file without extension (e.g. path/model_name).")
-    parser.add_argument("-mld", "--model_ld", required=True, type=str,
-                        help="Path to the landmark detection model file without extension (e.g. path/model_name).")
-    parser.add_argument("-mge", "--model_ge", required=True, type=str,
-                        help="Path to the gaze estimation model file without extension (e.g. path/model_name).")
-    parser.add_argument("-i", "--input", required=True, type=str,
-                        help="Use 'CAM' for camera or path to video file")
-    parser.add_argument("-l", "--cpu_extension", required=False, type=str,
-                        default=None,
-                        help="Path to cpu extension if needed.")
     parser.add_argument("-df", "--draw_flags", required=False, nargs='+',
-                        default=[],
+                        default=["fd", "hp", "ld", "ge"],
                         help="Flags to draw model(s) output on the video (e.g. fd hp ld ge)"
                              "fd to draw face detection output"
                              "hp to draw head pose output"
                              "ld to draw landmark detection output"
                              "ge to draw gaze estimation output" )
-    parser.add_argument("-d", "--device", type=str, default="CPU",
-                        help="Specify the target device: "
-                             "CPU, GPU, FPGA, MYRIAD or MULTI (e.g. ""MULTI:CPU(2),GPU(2)"")")
-    parser.add_argument("-pt", "--threshold", type=float, default=0.5,
-                        help="Minimum inference probability threshold (0.5 by default)")
     return parser
 
 
@@ -54,18 +38,15 @@ def main():
 
     args = build_argparser().parse_args()
 
-    model_fd=args.model_fd
-    model_hp=args.model_hp
-    model_ld=args.model_ld
-    model_ge=args.model_ge
+    model_fd=str(Path("models/face-detection-retail-0004/face-detection-retail-0004").resolve().absolute())
+    model_hp=str(Path("models/head-pose-estimation-adas-0001/head-pose-estimation-adas-0001").resolve().absolute())
+    model_ld=str(Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009").resolve().absolute())
+    model_ge=str(Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002").resolve().absolute())
 
-    device=args.device
     draw_flags=args.draw_flags
-    if args.input=='CAM':
-        video_file=0
-    else: video_file=args.input
+    video_file=str(Path("demo.mp4").resolve().absolute())
 
-    threshold=args.threshold
+    threshold=0
 
     mc=MouseController(precision='low', speed='fast')
 
@@ -74,10 +55,10 @@ def main():
     log.info("Creating fd Inference Engine...")
     ie = IECore()
 
-    fd= Face_detection(model_fd, device, threshold)
-    hp= Head_pose(model_hp, device, threshold)
-    ld= Landmark_detection(model_ld, device, threshold)
-    ge=Gaze_estimation(model_ge, device, threshold)
+    fd= Face_detection(model_fd, threshold)
+    hp= Head_pose(model_hp, threshold)
+    ld= Landmark_detection(model_ld, threshold)
+    ge=Gaze_estimation(model_ge, threshold)
 
     fd.load_model(ie)
     hp.load_model(ie)
@@ -97,7 +78,7 @@ def main():
     initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     fps=15
-    out_video = cv2.VideoWriter(os.path.join('results', 'output_video_'+args.device+'.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
+    out_video = cv2.VideoWriter(os.path.join('results', 'output_video.mp4'), cv2.VideoWriter_fourcc(*'avc1'), fps, (initial_w, initial_h), True)
 
     counter=0
     start_inference_time=time.time()

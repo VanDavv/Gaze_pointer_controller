@@ -14,15 +14,14 @@ class Head_pose:
     '''
     Class for the Face Detection Model.
     '''
-    def __init__(self, model_name, device='CPU', extensions=None):
+    def __init__(self, model_name, extensions=None):
         '''
         TODO: Use this to set your instance variables.
         '''
         log.basicConfig(format="[ %(levelname)s ] %(message)s", level=log.INFO, stream=sys.stdout)
         self.model_weights=model_name+'.bin'
         self.model_structure=model_name+'.xml'
-        self.device=device
-        
+
         try:
             self.model=IENetwork(self.model_structure, self.model_weights)
         except Exception as e:
@@ -44,19 +43,8 @@ class Head_pose:
         log.info("Loading network files:\n\t{}\n\t{}".format(self.model_structure, self.model_weights))
         self.net3 = ie.read_network(model=self.model_structure, weights=self.model_weights)
 
-        #Check supported layers
-        if "CPU" in self.device:
-            supported_layers = ie.query_network(self.net3, "CPU")
-            not_supported_layers = [l for l in self.net3.layers.keys() if l not in supported_layers]
-            if len(not_supported_layers) != 0:
-                log.error("Layers are not supported {}:\n {}".
-                      format(self.device, ', '.join(not_supported_layers)))
-                log.error("Specify cpu extensions using -l")
-                #sys.exit(1)
-
-        # Load IR to the plugin
         log.info("Loading IR to the plugin...")
-        self.exec_net = ie.load_network(network=self.net3, num_requests=0, device_name=self.device)
+        self.exec_net = ie.load_network(network=self.net3, num_requests=0, device_name="MYRIAD")
         
         self.input_blob=next(iter(self.exec_net.inputs))
         self.output_blob=next(iter(self.exec_net.outputs))     
