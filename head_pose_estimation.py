@@ -53,10 +53,7 @@ class Head_pose:
         self.initial_w = w
         self.initial_h = h 
 
-    def predict(self, image, origin, draw_flags):
-        '''
-        Perform inference.
-        '''
+    def predict(self, image, origin):
         log.info("Performing hd inference...")
         
         feed_dict = self.preprocess_input(image)
@@ -67,8 +64,7 @@ class Head_pose:
                 break
             else: time.sleep(1)
         pose=self.preprocess_output(outputs)
-        if 'hp' in draw_flags:
-            self.draw_outputs(pose, image, origin)
+        self.draw_outputs(pose, image, origin)
         return pose, image
 
     def preprocess_input(self, image):

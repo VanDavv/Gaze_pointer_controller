@@ -40,7 +40,7 @@ class Landmark_detection:
         self.output_name=next(iter(self.exec_net.outputs))
         self.output_shape=self.exec_net.outputs[self.output_name].shape
 
-    def predict(self, image, draw_flags):
+    def predict(self, image):
         '''
         Perform inference.
         '''
@@ -60,8 +60,7 @@ class Landmark_detection:
             else: time.sleep(1)
         
         coords=self.preprocess_output(outputs)
-        if 'ld' in draw_flags:
-            self.draw_outputs(coords, image)
+        self.draw_outputs(coords, image)
 
         left_eye=image[int(coords[1]*h)-30:int(coords[1]*h)+30, int(coords[0]*w)-30:int(coords[0]*w)+30]
         right_eye=image[int(coords[3]*h)-30:int(coords[3]*h)+30, int(coords[2]*w)-30:int(coords[2]*w)+30]

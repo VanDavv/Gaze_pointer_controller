@@ -50,7 +50,7 @@ class Face_detection:
         self.output_blob=next(iter(self.exec_net.outputs))
          
 
-    def predict(self, image, draw_flags):
+    def predict(self, image):
         '''
         Perform inference.
         '''
@@ -65,8 +65,7 @@ class Face_detection:
         coords=self.preprocess_output(outputs)
 
         head_image=image[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
-        if 'fd' in draw_flags:
-            self.draw_outputs(coords, image)
+        self.draw_outputs(coords, image)
         return coords, image, head_image
 
     def preprocess_input(self, image):

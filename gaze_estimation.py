@@ -42,7 +42,7 @@ class Gaze_estimation:
         self.output_name=next(iter(self.exec_net.outputs))
         self.output_shape=self.exec_net.outputs[self.output_name].shape
 
-    def predict(self, r_eye, l_eye, pose, draw_flags):
+    def predict(self, r_eye, l_eye, pose):
         '''
         Perform inference.
         '''
@@ -59,8 +59,7 @@ class Gaze_estimation:
                 break
             else: time.sleep(1)
         coords=self.preprocess_output(outputs)
-        if 'ge' in draw_flags:
-            self.draw_outputs(coords, r_eye, l_eye)
+        self.draw_outputs(coords, r_eye, l_eye)
         return coords
 
     def preprocess_input(self, image):
