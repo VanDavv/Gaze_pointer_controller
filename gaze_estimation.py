@@ -5,13 +5,9 @@ import cv2
 
 
 class GazeEstimation:
-    def __init__(self):
+    def __init__(self, ie):
         self.model_weights = Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002.bin").resolve().absolute()
         self.model_structure = self.model_weights.with_suffix('.xml')
-        self.initial_w = None
-        self.initial_h = None
-
-    def load_model(self, ie):
         self.net4 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
         self.exec_net = ie.load_network(network=self.net4, num_requests=0, device_name="MYRIAD")
         self.input_name = next(iter(self.exec_net.inputs))
@@ -62,7 +58,3 @@ class GazeEstimation:
         x, y = int(coords[0] * 100), int(coords[1] * 100)
         cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
         cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
-
-    def set_initial(self, w, h):
-        self.initial_w = w
-        self.initial_h = h

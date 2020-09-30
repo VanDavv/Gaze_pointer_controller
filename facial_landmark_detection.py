@@ -5,11 +5,9 @@ import time
 
 
 class LandmarkDetection:
-    def __init__(self):
+    def __init__(self, ie):
         self.model_weights = Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009.bin").resolve().absolute()
         self.model_structure = self.model_weights.with_suffix('.xml')
-
-    def load_model(self, ie):
         self.net2 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
         self.exec_net = ie.load_network(network=self.net2, num_requests=0, device_name="MYRIAD")
         self.input_name = next(iter(self.exec_net.inputs))

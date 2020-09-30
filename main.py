@@ -13,36 +13,21 @@ from gaze_estimation import GazeEstimation
 def main():
     video_file = str(Path("demo.mp4").resolve().absolute())
 
+    cap = cv2.VideoCapture(video_file)
+    initial_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
     log.info("Creating fd Inference Engine...")
     ie = IECore()
 
-    fd = FaceDetection()
-    hp = HeadPose()
-    ld = LandmarkDetection()
-    ge = GazeEstimation()
-
-    fd.load_model(ie)
-    hp.load_model(ie)
-    ld.load_model(ie)
-    ge.load_model(ie)
-
-    try:
-        cap = cv2.VideoCapture(video_file)
-    except FileNotFoundError:
-        print("Cannot locate video file: " + video_file)
-    except Exception as e:
-        print("Something else went wrong with the video file: ", e)
-
-    initial_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    initial_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fd = FaceDetection(ie, initial_w, initial_h)
+    hp = HeadPose(ie)
+    ld = LandmarkDetection(ie)
+    ge = GazeEstimation(ie)
 
     counter = 0
 
     try:
-        fd.set_initial(initial_w, initial_h)
-        hp.set_initial(initial_w, initial_h)
-        ge.set_initial(initial_w, initial_h)
-
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
