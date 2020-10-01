@@ -19,7 +19,7 @@ class GazeEstimation:
         input_dict = {}
         input_dict['left_eye_image'] = self.preprocess_input(r_eye)
         input_dict['right_eye_image'] = self.preprocess_input(l_eye)
-        input_dict['head_pose_angles'] = pose
+        input_dict['head_pose_angles'] = [pose]
 
         self.exec_net.start_async(request_id=0, inputs=input_dict)
         while True:
@@ -28,8 +28,19 @@ class GazeEstimation:
                 break
             else:
                 time.sleep(1)
-        coords = self.preprocess_output()
-        self.draw_outputs(coords, r_eye, l_eye)
+        coords = (
+            self.exec_net.requests[0].outputs['gaze_vector'][0][0],
+            self.exec_net.requests[0].outputs['gaze_vector'][0][1],
+            self.exec_net.requests[0].outputs['gaze_vector'][0][2],
+        )
+        origin_x_re = r_eye.shape[1] // 2
+        origin_y_re = r_eye.shape[0] // 2
+        origin_x_le = l_eye.shape[1] // 2
+        origin_y_le = l_eye.shape[0] // 2
+
+        x, y = int(coords[0] * 100), int(coords[1] * 100)
+        cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
+        cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
         return coords
 
     def preprocess_input(self, image):
@@ -41,20 +52,3 @@ class GazeEstimation:
             return in_frame
         except Exception as e:
             print(str(e))
-
-    def preprocess_output(self):
-        x = self.exec_net.requests[0].outputs['gaze_vector'][0][0]
-        y = self.exec_net.requests[0].outputs['gaze_vector'][0][1]
-        z = self.exec_net.requests[0].outputs['gaze_vector'][0][2]
-
-        return (x, y, z)
-
-    def draw_outputs(self, coords, r_eye, l_eye):
-        origin_x_re = r_eye.shape[1] // 2
-        origin_y_re = r_eye.shape[0] // 2
-        origin_x_le = l_eye.shape[1] // 2
-        origin_y_le = l_eye.shape[0] // 2
-
-        x, y = int(coords[0] * 100), int(coords[1] * 100)
-        cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
-        cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
