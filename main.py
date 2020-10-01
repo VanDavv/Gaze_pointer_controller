@@ -5,6 +5,8 @@ import numpy as np
 from openvino.inference_engine import IENetwork, IECore
 from utils import draw_3d_axis
 
+debug = True
+
 
 def prepare_input(nnet, in_dict):
     result = {}
@@ -38,8 +40,10 @@ def load_net(ie, dir: Path):
 
 class Main:
     def __init__(self):
+        print("Loading input...")
         self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
         self.ie = IECore()
+        print("Loading networks...")
         self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
         self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
         self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
@@ -54,8 +58,9 @@ class Main:
             if obj[2] > 0.6
         ]
         head_image = frame[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
-        for obj in coords:
-            cv2.rectangle(frame, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
+        if debug:
+            for obj in coords:
+                cv2.rectangle(frame, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
         return head_image
 
     def run_landmark(self, face_frame):
@@ -66,17 +71,20 @@ class Main:
         right_eye_image = face_frame[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
         left_eye_image = face_frame[int(left_eye[1]*h) - 30:int(left_eye[1]*h) + 30, int(left_eye[0]*w) - 30:int(left_eye[0]*w) + 30]
 
-        cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
-        cv2.rectangle(face_frame, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
-        cv2.rectangle(face_frame, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
+        if debug:
+            cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
+            cv2.rectangle(face_frame, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
+            cv2.rectangle(face_frame, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
 
         return left_eye_image, right_eye_image, nose
 
     def run_pose(self, face_frame, nose):
         out = run_net(self.pose_net, {"data": face_frame})
         head_pose = [value[0] for value in out.values()]
-        height, width = face_frame.shape[:2]
-        draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
+
+        if debug:
+            height, width = face_frame.shape[:2]
+            draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
         return head_pose
 
     def run_gaze(self, l_eye, r_eye, pose):
@@ -86,14 +94,15 @@ class Main:
             "head_pose_angles": pose
         })
 
-        origin_x_re = r_eye.shape[1] // 2
-        origin_y_re = r_eye.shape[0] // 2
-        origin_x_le = l_eye.shape[1] // 2
-        origin_y_le = l_eye.shape[0] // 2
+        if debug:
+            origin_x_re = r_eye.shape[1] // 2
+            origin_y_re = r_eye.shape[0] // 2
+            origin_x_le = l_eye.shape[1] // 2
+            origin_y_le = l_eye.shape[0] // 2
 
-        x, y = (out["gaze_vector"] * 100).astype(int)[:2]
-        cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
-        cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
+            x, y = (out["gaze_vector"] * 100).astype(int)[:2]
+            cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
+            cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
         return out["gaze_vector"]
 
     def parse(self, frame):
@@ -112,9 +121,10 @@ class Main:
 
             self.parse(frame)
 
-            cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
-            if cv2.waitKey(1) == ord('q'):
-                break
+            if debug:
+                cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
+                if cv2.waitKey(1) == ord('q'):
+                    break
 
         self.cap.release()
         cv2.destroyAllWindows()
