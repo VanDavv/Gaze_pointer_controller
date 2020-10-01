@@ -36,62 +36,51 @@ def load_net(ie, dir: Path):
     return ie.load_network(network=net, num_requests=0, device_name="MYRIAD")
 
 
-class FaceDetection:
-    def __init__(self, ie):
-        self.net = load_net(ie, Path("models/face-detection-retail-0004"))
+class Main:
+    def __init__(self):
+        self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
+        self.ie = IECore()
+        self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
+        self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
+        self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
+        self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
 
-    def predict(self, image):
-        out = run_net(self.net, {"data": image})
-        height, width = image.shape[:2]
+    def run_face(self, frame):
+        out = run_net(self.face_net, {"data": frame})
+        height, width = frame.shape[:2]
         coords = [
             (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
             for obj in out["detection_out"][0]
             if obj[2] > 0.6
         ]
-        head_image = image[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
+        head_image = frame[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
         for obj in coords:
-            cv2.rectangle(image, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
+            cv2.rectangle(frame, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
         return head_image
 
-
-class LandmarkDetection:
-    def __init__(self, ie):
-        self.net = load_net(ie, Path("models/landmarks-regression-retail-0009"))
-
-    def predict(self, image):
-        out = run_net(self.net, {"0": image})
+    def run_landmark(self, face_frame):
+        out = run_net(self.landmark_net, {"0": face_frame})
         right_eye, left_eye, nose = out["95"][:2], out["95"][2:4], out["95"][4:]
-        w = image.shape[1]
-        h = image.shape[0]
+        h, w = face_frame.shape[:2]
 
-        right_eye_image = image[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
-        left_eye_image = image[int(left_eye[1]*h) - 30:int(left_eye[1]*h) + 30, int(left_eye[0]*w) - 30:int(left_eye[0]*w) + 30]
+        right_eye_image = face_frame[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
+        left_eye_image = face_frame[int(left_eye[1]*h) - 30:int(left_eye[1]*h) + 30, int(left_eye[0]*w) - 30:int(left_eye[0]*w) + 30]
 
-        cv2.circle(image, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
-        cv2.rectangle(image, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
-        cv2.rectangle(image, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
+        cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
+        cv2.rectangle(face_frame, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
+        cv2.rectangle(face_frame, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
 
         return left_eye_image, right_eye_image, nose
 
-
-class HeadPose:
-    def __init__(self, ie):
-        self.net = load_net(ie, Path("models/head-pose-estimation-adas-0001"))
-
-    def predict(self, image, origin):
-        out = run_net(self.net, {"data": image})
+    def run_pose(self, face_frame, nose):
+        out = run_net(self.pose_net, {"data": face_frame})
         head_pose = [value[0] for value in out.values()]
-        height, width = image.shape[:2]
-        draw_3d_axis(image, head_pose[2], head_pose[1], head_pose[0], int(origin[0] * width), int(origin[1] * height))
+        height, width = face_frame.shape[:2]
+        draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
         return head_pose
 
-
-class GazeEstimation:
-    def __init__(self, ie):
-        self.net = load_net(ie, Path("models/gaze-estimation-adas-0002"))
-
-    def predict(self, l_eye, r_eye, pose):
-        out = run_net(self.net, {
+    def run_gaze(self, l_eye, r_eye, pose):
+        out = run_net(self.gaze_net, {
             "left_eye_image": l_eye,
             "right_eye_image": r_eye,
             "head_pose_angles": pose
@@ -107,31 +96,29 @@ class GazeEstimation:
         cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
         return out["gaze_vector"]
 
+    def parse(self, frame):
+        face_image = self.run_face(frame)
+        left_eye, right_eye, nose = self.run_landmark(face_image)
+        pose = self.run_pose(face_image, nose)
+        if left_eye.size > 0 and right_eye.size > 0:
+            eye_pose = self.run_gaze(left_eye, right_eye, pose)
+            print(eye_pose)
+
+    def run(self):
+        while self.cap.isOpened():
+            read_correctly, frame = self.cap.read()
+            if not read_correctly:
+                return
+
+            self.parse(frame)
+
+            cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
+            if cv2.waitKey(1) == ord('q'):
+                break
+
+        self.cap.release()
+        cv2.destroyAllWindows()
+
 
 if __name__ == '__main__':
-    cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
-
-    ie = IECore()
-
-    fd = FaceDetection(ie)
-    hp = HeadPose(ie)
-    ld = LandmarkDetection(ie)
-    ge = GazeEstimation(ie)
-
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if cv2.waitKey(1) == ord('q'):
-            break
-
-        head_image = fd.predict(frame)
-        left_eye, right_eye, nose = ld.predict(head_image)
-        head_pose = hp.predict(head_image, nose)
-        if left_eye.size > 0 and right_eye.size > 0:
-            eye_pose = ge.predict(left_eye, right_eye, head_pose)
-            print(eye_pose)
-        cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
-
-    cap.release()
-    cv2.destroyAllWindows()
+    Main().run()
