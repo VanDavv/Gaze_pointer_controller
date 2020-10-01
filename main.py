@@ -18,7 +18,7 @@ def prepare_input(nnet, in_dict):
     return result
 
 
-def run_network(nnet, in_dict):
+def run_net(nnet, in_dict):
     nnet.start_async(request_id=0, inputs=prepare_input(nnet, in_dict))
     while nnet.requests[0].wait(-1) != 0:
         time.sleep(0.1)
@@ -29,15 +29,19 @@ def run_network(nnet, in_dict):
     return result
 
 
+def load_net(ie, dir: Path):
+    definition = str(next(dir.glob("*.xml")).resolve().absolute())
+    weights = str(next(dir.glob("*.bin")).resolve().absolute())
+    net = ie.read_network(model=definition, weights=weights)
+    return ie.load_network(network=net, num_requests=0, device_name="MYRIAD")
+
+
 class FaceDetection:
     def __init__(self, ie):
-        self.model_weights = Path("models/face-detection-retail-0004/face-detection-retail-0004.bin").resolve().absolute()
-        self.model_structure = self.model_weights.with_suffix('.xml')
-        self.net = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
-        self.exec_net = ie.load_network(network=self.net, num_requests=0, device_name="MYRIAD")
+        self.net = load_net(ie, Path("models/face-detection-retail-0004"))
 
     def predict(self, image):
-        out = run_network(self.exec_net, {"data": image})
+        out = run_net(self.net, {"data": image})
         height, width = image.shape[:2]
         coords = [
             (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
@@ -52,13 +56,10 @@ class FaceDetection:
 
 class LandmarkDetection:
     def __init__(self, ie):
-        self.model_weights = Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009.bin").resolve().absolute()
-        self.model_structure = self.model_weights.with_suffix('.xml')
-        self.net2 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
-        self.exec_net = ie.load_network(network=self.net2, num_requests=0, device_name="MYRIAD")
+        self.net = load_net(ie, Path("models/landmarks-regression-retail-0009"))
 
     def predict(self, image):
-        out = run_network(self.exec_net, {"0": image})
+        out = run_net(self.net, {"0": image})
         right_eye, left_eye, nose = out["95"][:2], out["95"][2:4], out["95"][4:]
         w = image.shape[1]
         h = image.shape[0]
@@ -75,13 +76,10 @@ class LandmarkDetection:
 
 class HeadPose:
     def __init__(self, ie):
-        self.model_weights = Path("models/head-pose-estimation-adas-0001/head-pose-estimation-adas-0001.bin").resolve().absolute()
-        self.model_structure = self.model_weights.with_suffix('.xml')
-        self.net3 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
-        self.exec_net = ie.load_network(network=self.net3, num_requests=0, device_name="MYRIAD")
+        self.net = load_net(ie, Path("models/head-pose-estimation-adas-0001"))
 
     def predict(self, image, origin):
-        out = run_network(self.exec_net, {"data": image})
+        out = run_net(self.net, {"data": image})
         head_pose = [value[0] for value in out.values()]
         height, width = image.shape[:2]
         draw_3d_axis(image, head_pose[2], head_pose[1], head_pose[0], int(origin[0] * width), int(origin[1] * height))
@@ -90,13 +88,10 @@ class HeadPose:
 
 class GazeEstimation:
     def __init__(self, ie):
-        self.model_weights = Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002.bin").resolve().absolute()
-        self.model_structure = self.model_weights.with_suffix('.xml')
-        self.net4 = ie.read_network(model=str(self.model_structure), weights=str(self.model_weights))
-        self.exec_net = ie.load_network(network=self.net4, num_requests=0, device_name="MYRIAD")
+        self.net = load_net(ie, Path("models/gaze-estimation-adas-0002"))
 
     def predict(self, l_eye, r_eye, pose):
-        out = run_network(self.exec_net, {
+        out = run_net(self.net, {
             "left_eye_image": l_eye,
             "right_eye_image": r_eye,
             "head_pose_angles": pose
@@ -114,9 +109,7 @@ class GazeEstimation:
 
 
 if __name__ == '__main__':
-    video_file = str(Path("demo.mp4").resolve().absolute())
-
-    cap = cv2.VideoCapture(video_file)
+    cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
 
     ie = IECore()
 
@@ -125,14 +118,11 @@ if __name__ == '__main__':
     ld = LandmarkDetection(ie)
     ge = GazeEstimation(ie)
 
-    counter = 0
-
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        counter += 1
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) == ord('q'):
             break
 
         head_image = fd.predict(frame)
