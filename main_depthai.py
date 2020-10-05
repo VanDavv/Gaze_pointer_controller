@@ -1,75 +1,134 @@
+import time
 from pathlib import Path
-
-import depthai
 import cv2
 import numpy as np
+from openvino.inference_engine import IENetwork, IECore
+from utils import draw_3d_axis
 
-print('Using depthai module from: ', depthai.__file__, ' version: ', depthai.__version__)
-
-print("Creating pipeline...")
-p = depthai.Pipeline()
-
-# ColorCamera
-print("Creating Color Camera...")
-cam = p.createColorCamera()
-cam.setPreviewSize(300, 300)
-cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
-cam.setInterleaved(False)
-cam.setCamId(0)
-cam_xout = p.createXLinkOut()
-cam_xout.setStreamName("preview")
-cam.preview.link(cam_xout.input)
-
-# NeuralNetwork
-print("Creating Neural Network...")
-nn = p.createNeuralNetwork()
-nn.setBlobPath(str(Path("models/face-detection-retail-0004/face-detection-retail-0004.blob").resolve().absolute()))
-nn_xout = p.createXLinkOut()
-nn_xout.setStreamName("face_nn")
-cam.preview.link(nn.input)
-nn.out.link(nn_xout.input)
-print("Pipeline created.")
+debug = True
 
 
-# Get first device and connect
-print("Looking for devices...")
-found, deviceInfo = depthai.XLinkConnection.getFirstDevice(depthai.X_LINK_UNBOOTED)
-if found:
-    print("Device found.")
-    device = depthai.Device(deviceInfo)
-    print("Starting pipeline...")
-    device.startPipeline(p)
-    preview = device.getOutputQueue("preview")
-    face_nn = device.getOutputQueue("face_nn")
-    print("Pipeline started.")
-    while True:
-        face_raw_output = np.frombuffer(bytes(face_nn.get().data), dtype=np.float16).reshape((200, 7))
-        data = [
-            {
-                "label": data[1],
-                "conf": data[2],
-                "x_min": data[3],
-                "y_min": data[4],
-                "x_max": data[5],
-                "y_max": data[6],
-            }
-            for data in face_raw_output
-            if data[2] > 0.5
+def prepare_input(nnet, in_dict):
+    result = {}
+    for key in in_dict:
+        shape = nnet.inputs[key].shape
+        in_frame = np.array(in_dict[key])
+        if len(shape) == 4:
+            in_frame = cv2.resize(in_frame, tuple(shape[-2:]))
+            in_frame = in_frame.transpose((2, 0, 1))  # Change data layout from HWC to CHW
+        result[key] = in_frame.reshape(shape)
+    return result
+
+
+def run_net(nnet, in_dict):
+    nnet.start_async(request_id=0, inputs=prepare_input(nnet, in_dict))
+    while nnet.requests[0].wait(-1) != 0:
+        time.sleep(0.1)
+    result = {
+        key: nnet.requests[0].outputs[key][0]
+        for key in nnet.requests[0].outputs
+    }
+    return result
+
+
+def load_net(ie, dir: Path):
+    definition = str(next(dir.glob("*.xml")).resolve().absolute())
+    weights = str(next(dir.glob("*.bin")).resolve().absolute())
+    net = ie.read_network(model=definition, weights=weights)
+    return ie.load_network(network=net, num_requests=0, device_name="MYRIAD")
+
+
+class Main:
+    def __init__(self):
+        print("Loading input...")
+        self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
+        self.ie = IECore()
+        print("Loading networks...")
+        self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
+        self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
+        self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
+        self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
+
+    def run_face(self, frame):
+        out = run_net(self.face_net, {"data": frame})
+        height, width = frame.shape[:2]
+        coords = [
+            (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
+            for obj in out["detection_out"][0]
+            if obj[2] > 0.6
         ]
+        head_image = frame[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
+        if debug:
+            for obj in coords:
+                cv2.rectangle(frame, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
+        return head_image
 
-        preview_frame = np.array(preview.get().data).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
-        preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
+    def run_landmark(self, face_frame):
+        out = run_net(self.landmark_net, {"0": face_frame})
+        right_eye, left_eye, nose = out["95"][:2], out["95"][2:4], out["95"][4:]
+        h, w = face_frame.shape[:2]
 
-        for e in data:
-            pt1 = int(e['x_min'] * 300), int(e['y_min'] * 300)
-            pt2 = int(e['x_max'] * 300), int(e['y_max'] * 300)
-            cv2.rectangle(preview_frame, pt1, pt2, 100, 2)
+        right_eye_image = face_frame[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
+        left_eye_image = face_frame[int(left_eye[1]*h) - 30:int(left_eye[1]*h) + 30, int(left_eye[0]*w) - 30:int(left_eye[0]*w) + 30]
 
-        preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_RGB2BGR)
-        cv2.imshow("test", preview_frame)
+        if debug:
+            cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
+            cv2.rectangle(face_frame, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
+            cv2.rectangle(face_frame, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
+
+        return left_eye_image, right_eye_image, nose
+
+    def run_pose(self, face_frame, nose):
+        out = run_net(self.pose_net, {"data": face_frame})
+        head_pose = [value[0] for value in out.values()]
+
+        if debug:
+            height, width = face_frame.shape[:2]
+            draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
+        return head_pose
+
+    def run_gaze(self, l_eye, r_eye, pose):
+        out = run_net(self.gaze_net, {
+            "left_eye_image": l_eye,
+            "right_eye_image": r_eye,
+            "head_pose_angles": pose
+        })
+
+        if debug:
+            origin_x_re = r_eye.shape[1] // 2
+            origin_y_re = r_eye.shape[0] // 2
+            origin_x_le = l_eye.shape[1] // 2
+            origin_y_le = l_eye.shape[0] // 2
+
+            x, y = (out["gaze_vector"] * 100).astype(int)[:2]
+            cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
+            cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
+        return out["gaze_vector"]
+
+    def parse(self, frame):
+        face_image = self.run_face(frame)
+        left_eye, right_eye, nose = self.run_landmark(face_image)
+        pose = self.run_pose(face_image, nose)
+        if left_eye.size > 0 and right_eye.size > 0:
+            eye_pose = self.run_gaze(left_eye, right_eye, pose)
+            print(eye_pose)
+
+    def run(self):
+        while self.cap.isOpened():
+            read_correctly, frame = self.cap.read()
+            if not read_correctly:
+                return
+
+            self.parse(frame)
+
+            if debug:
+                cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
+                if cv2.waitKey(1) == ord('q'):
+                    break
+
+        self.cap.release()
+        cv2.destroyAllWindows()
 
 
-        if cv2.waitKey(1) == ord("q"):
-            break
-else:
-    print('No depthai devices found...')
+if __name__ == '__main__':
+    Main().run()
