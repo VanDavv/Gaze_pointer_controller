@@ -6,7 +6,6 @@ import numpy as np
 
 print('Using depthai module from: ', depthai.__file__, ' version: ', depthai.__version__)
 
-
 print("Creating pipeline...")
 p = depthai.Pipeline()
 
@@ -15,7 +14,7 @@ print("Creating Color Camera...")
 cam = p.createColorCamera()
 cam.setPreviewSize(300, 300)
 cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
-cam.setInterleaved(True)
+cam.setInterleaved(False)
 cam.setCamId(0)
 cam_xout = p.createXLinkOut()
 cam_xout.setStreamName("preview")
@@ -44,9 +43,7 @@ if found:
     face_nn = device.getOutputQueue("face_nn")
     print("Pipeline started.")
     while True:
-        print("test1")
         face_raw_output = np.frombuffer(bytes(face_nn.get().data), dtype=np.float16).reshape((200, 7))
-        print("test2")
         data = [
             {
                 "label": data[1],
@@ -57,20 +54,18 @@ if found:
                 "y_max": data[6],
             }
             for data in face_raw_output
-            if data[2] > 0.4
+            if data[2] > 0.5
         ]
-        print(len(data), data)
 
-        print("test3")
-        preview_frame = np.array(preview.get().data).reshape((300, 300, 3)).astype(np.uint8)
-        print("test4")
+        preview_frame = np.array(preview.get().data).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
+        preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_BGR2RGB)
+
         for e in data:
             pt1 = int(e['x_min'] * 300), int(e['y_min'] * 300)
             pt2 = int(e['x_max'] * 300), int(e['y_max'] * 300)
+            cv2.rectangle(preview_frame, pt1, pt2, 100, 2)
 
-            cv2.rectangle(preview_frame, pt1, pt2, (0, 0, 255), 2)
-
-        print("test5")
+        preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_RGB2BGR)
         cv2.imshow("test", preview_frame)
 
 
