@@ -44,24 +44,34 @@ if found:
     face_nn = device.getOutputQueue("face_nn")
     print("Pipeline started.")
     while True:
-        face_raw_output = face_nn.get().data
+        print("test1")
+        face_raw_output = np.frombuffer(bytes(face_nn.get().data), dtype=np.float16).reshape((200, 7))
+        print("test2")
         data = [
             {
-                "conf": face_raw_output[i * 7],
-                "label": face_raw_output[i * 7 + 1],
-                "score": face_raw_output[i * 7 + 2],
-                "x_min": face_raw_output[i * 7 + 3],
-                "y_min": face_raw_output[i * 7 + 4],
-                "x_max": face_raw_output[i * 7 + 5],
-                "y_max": face_raw_output[i * 7 + 6],
+                "label": data[1],
+                "conf": data[2],
+                "x_min": data[3],
+                "y_min": data[4],
+                "x_max": data[5],
+                "y_max": data[6],
             }
-            for i in range(len(face_raw_output) // 7)
-            if face_raw_output[i * 7] != -1
+            for data in face_raw_output
+            if data[2] > 0.4
         ]
         print(len(data), data)
 
-        preview_frame = preview.get()
-        cv2.imshow("test", np.array(preview_frame.data).reshape((300, 300, 3)).astype(np.uint8))
+        print("test3")
+        preview_frame = np.array(preview.get().data).reshape((300, 300, 3)).astype(np.uint8)
+        print("test4")
+        for e in data:
+            pt1 = int(e['x_min'] * 300), int(e['y_min'] * 300)
+            pt2 = int(e['x_max'] * 300), int(e['y_max'] * 300)
+
+            cv2.rectangle(preview_frame, pt1, pt2, (0, 0, 255), 2)
+
+        print("test5")
+        cv2.imshow("test", preview_frame)
 
 
         if cv2.waitKey(1) == ord("q"):
