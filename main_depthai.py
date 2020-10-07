@@ -1,78 +1,106 @@
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 import cv2
 import numpy as np
-from openvino.inference_engine import IENetwork, IECore
+# from openvino.inference_engine import IENetwork, IECore
 from utils import draw_3d_axis
 import depthai
 
 debug = True
 
 
-def prepare_input(nnet, in_dict):
-    result = {}
-    for key in in_dict:
-        shape = nnet.inputs[key].shape
-        in_frame = np.array(in_dict[key])
-        if len(shape) == 4:
-            in_frame = cv2.resize(in_frame, tuple(shape[-2:]))
-            in_frame = in_frame.transpose((2, 0, 1))  # Change data layout from HWC to CHW
-        result[key] = in_frame.reshape(shape)
-    return result
+def wait_for_results(queue, name: str):
+    start = datetime.now()
+    notif = datetime.now()
+    while not queue.has():
+        if datetime.now() - notif > timedelta(microseconds=200):
+            print(f"Waiting for data in {name}...")
+            notif = datetime.now()
+        if datetime.now() - start > timedelta(seconds=1):
+            return False
+    return True
 
 
-def run_net(nnet, in_dict):
-    nnet.start_async(request_id=0, inputs=prepare_input(nnet, in_dict))
-    while nnet.requests[0].wait(-1) != 0:
-        time.sleep(0.1)
-    result = {
-        key: nnet.requests[0].outputs[key][0]
-        for key in nnet.requests[0].outputs
-    }
-    return result
+def valid(*args):
+    for arg in args:
+        if arg is None:
+            return False
+        if isinstance(arg, np.ndarray) and arg.size == 0:
+            return False
+
+    return True
 
 
-def load_net(ie, dir: Path):
-    definition = str(next(dir.glob("*.xml")).resolve().absolute())
-    weights = str(next(dir.glob("*.bin")).resolve().absolute())
-    net = ie.read_network(model=definition, weights=weights)
-    return ie.load_network(network=net, num_requests=0, device_name="CPU")
+def to_planar(arr: np.ndarray, shape: tuple) -> list:
+    return [val for channel in cv2.resize(arr, shape).transpose(2, 0, 1) for y_col in channel for val in y_col]
+
+
+def to_nn_result(raw_data: list):
+    return np.frombuffer(bytes(raw_data), dtype=np.float16)
+
+
+def to_bbox_result(raw_data: list):
+    arr = to_nn_result(raw_data)
+    arr = arr[:np.where(arr == -1)[0][0]]
+    arr = arr.reshape((arr.size // 7, 7))
+    return arr
 
 
 class Main:
     def __init__(self):
         print("Loading input...")
+        self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
         self.create_pipeline()
         self.start_pipeline()
-        self.ie = IECore()
-        print("Loading networks...")
-        self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
-        self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
-        self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
-        self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
+        # self.ie = IECore()
+        # print("Loading networks...")
+        # self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
+        # self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
+        # self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
+        # self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
 
     def create_pipeline(self):
         print("Creating pipeline...")
         self.pipeline = depthai.Pipeline()
+        
         # ColorCamera
-        print("Creating Color Camera...")
-        cam = self.pipeline.createColorCamera()
-        cam.setPreviewSize(300, 300)
-        cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        cam.setInterleaved(False)
-        cam.setCamId(0)
-        cam_xout = self.pipeline.createXLinkOut()
-        cam_xout.setStreamName("preview")
-        cam.preview.link(cam_xout.input)
+        # print("Creating Color Camera...")
+        # cam = self.pipeline.createColorCamera()
+        # cam.setPreviewSize(300, 300)
+        # cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        # cam.setInterleaved(False)
+        # cam.setCamId(0)
+        # cam_xout = self.pipeline.createXLinkOut()
+        # cam_xout.setStreamName("preview")
+        # cam.preview.link(cam_xout.input)
 
+        # FrameInput
+        frame_in = self.pipeline.createXLinkIn()
+        frame_in.setStreamName("frame_in")
+
+        
         # NeuralNetwork
-        print("Creating Neural Network...")
-        nn = self.pipeline.createNeuralNetwork()
-        nn.setBlobPath(str(Path("models/face-detection-retail-0004/face-detection-retail-0004.blob").resolve().absolute()))
-        nn_xout = self.pipeline.createXLinkOut()
-        nn_xout.setStreamName("face_nn")
-        cam.preview.link(nn.input)
-        nn.out.link(nn_xout.input)
+        print("Creating Face Detection Neural Network...")
+        face_nn = self.pipeline.createNeuralNetwork()
+        face_nn.setBlobPath(str(Path("models/face-detection-retail-0004/face-detection-retail-0004.blob").resolve().absolute()))
+        face_nn_xout = self.pipeline.createXLinkOut()
+        face_nn_xout.setStreamName("face_nn")
+        frame_in.out.link(face_nn.input)
+        face_nn.out.link(face_nn_xout.input)
+        
+        # NeuralNetwork
+        print("Creating Landmarks Detection Neural Network...")
+        land_nn = self.pipeline.createNeuralNetwork()
+        land_nn.setBlobPath(
+            str(Path("models/landmarks-regression-retail-0009/landmarks-regression-retail-0009.blob").resolve().absolute())
+        )
+        land_nn_xin = self.pipeline.createXLinkIn()
+        land_nn_xin.setStreamName("landmark_in")
+        land_nn_xin.out.link(land_nn.input)
+        land_nn_xout = self.pipeline.createXLinkOut()
+        land_nn_xout.setStreamName("landmark_nn")
+        land_nn.out.link(land_nn_xout.input)
         print("Pipeline created.")
 
     def start_pipeline(self):
@@ -83,17 +111,28 @@ class Main:
         self.device = depthai.Device(deviceInfo)
         print("Starting pipeline...")
         self.device.startPipeline(self.pipeline)
-        self.preview = self.device.getOutputQueue("preview")
+        self.frame_in = self.device.getInputQueue("frame_in")
         self.face_nn = self.device.getOutputQueue("face_nn")
+        self.land_in = self.device.getInputQueue("landmark_in")
+        self.land_nn = self.device.getOutputQueue("landmark_nn")
 
     def run_face(self, frame):
-        out = run_net(self.face_net, {"data": frame})
+        buff = depthai.RawBuffer()
+        buff.data = to_planar(frame, (300, 300))
+        self.frame_in.send(buff)
+        has_results = wait_for_results(self.face_nn, "face_nn")
+        if not has_results:
+            print("No data from face_nn, skipping frame...")
+            return None
+        results = to_bbox_result(self.face_nn.get().data)
         height, width = frame.shape[:2]
         coords = [
             (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
-            for obj in out["detection_out"][0]
-            if obj[2] > 0.6
+            for obj in results
+            if obj[2] > 0.4
         ]
+        if len(coords) == 0:
+            return None
         head_image = frame[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
         if debug:
             for obj in coords:
@@ -101,8 +140,16 @@ class Main:
         return head_image
 
     def run_landmark(self, face_frame):
-        out = run_net(self.landmark_net, {"0": face_frame})
-        right_eye, left_eye, nose = out["95"][:2], out["95"][2:4], out["95"][4:]
+        buff = depthai.RawBuffer()
+        buff.data = to_planar(face_frame, (48, 48))
+        self.land_in.send(buff)
+        has_results = wait_for_results(self.land_nn, "land_nn")
+        if not has_results:
+            print("No data from land_nn, skipping frame...")
+            return None, None, None
+
+        out = to_nn_result(self.land_nn.get().data)
+        right_eye, left_eye, nose = out[:2], out[2:4], out[4:6]
         h, w = face_frame.shape[:2]
 
         right_eye_image = face_frame[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
@@ -110,8 +157,8 @@ class Main:
 
         if debug:
             cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
-            cv2.rectangle(face_frame, (right_eye[0] * w - 30, right_eye[1] * h - 30), (right_eye[0] * w + 30, right_eye[1] * h + 30), (245, 245, 245), 2)
-            cv2.rectangle(face_frame, (left_eye[0] * w - 30, left_eye[1] * h - 30), (left_eye[0] * w + 30, left_eye[1] * h + 30), (245, 245, 245), 2)
+            cv2.rectangle(face_frame, (int(right_eye[0] * w - 30), int(right_eye[1] * h - 30)), (int(right_eye[0] * w + 30), int(right_eye[1] * h + 30)), 245, 2)
+            cv2.rectangle(face_frame, (int(left_eye[0] * w - 30), int(left_eye[1] * h - 30)), (int(left_eye[0] * w + 30), int(left_eye[1] * h + 30)), 245, 2)
 
         return left_eye_image, right_eye_image, nose
 
@@ -144,16 +191,23 @@ class Main:
 
     def parse(self, frame):
         face_image = self.run_face(frame)
-        left_eye, right_eye, nose = self.run_landmark(face_image)
-        pose = self.run_pose(face_image, nose)
-        if left_eye.size > 0 and right_eye.size > 0:
-            eye_pose = self.run_gaze(left_eye, right_eye, pose)
-            print(eye_pose)
+        if valid(face_image):
+            cv2.imshow("face", face_image)
+            left_eye, right_eye, nose = self.run_landmark(face_image)
+            if valid(left_eye, right_eye, nose):
+                cv2.imshow("left_eye", left_eye)
+                cv2.imshow("right_eye", right_eye)
+
+        # pose = self.run_pose(face_image, nose)
+        # if left_eye.size > 0 and right_eye.size > 0:
+        #     eye_pose = self.run_gaze(left_eye, right_eye, pose)
+        #     print(eye_pose)
 
     def run(self):
-        while True:
-            frame = np.array(self.preview.get().data).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        while self.cap.isOpened():
+            read_correctly, frame = self.cap.read()
+            if not read_correctly:
+                break
 
             self.parse(frame)
 
@@ -162,6 +216,7 @@ class Main:
                 if cv2.waitKey(1) == ord('q'):
                     break
 
+        self.cap.release()
         cv2.destroyAllWindows()
 
 
