@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 from openvino.inference_engine import IENetwork, IECore
 from utils import draw_3d_axis
+import depthai
 
 debug = True
 
@@ -35,19 +36,55 @@ def load_net(ie, dir: Path):
     definition = str(next(dir.glob("*.xml")).resolve().absolute())
     weights = str(next(dir.glob("*.bin")).resolve().absolute())
     net = ie.read_network(model=definition, weights=weights)
-    return ie.load_network(network=net, num_requests=0, device_name="MYRIAD")
+    return ie.load_network(network=net, num_requests=0, device_name="CPU")
 
 
 class Main:
     def __init__(self):
         print("Loading input...")
-        self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
+        self.create_pipeline()
+        self.start_pipeline()
         self.ie = IECore()
         print("Loading networks...")
         self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
         self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
         self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
         self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
+
+    def create_pipeline(self):
+        print("Creating pipeline...")
+        self.pipeline = depthai.Pipeline()
+        # ColorCamera
+        print("Creating Color Camera...")
+        cam = self.pipeline.createColorCamera()
+        cam.setPreviewSize(300, 300)
+        cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        cam.setInterleaved(False)
+        cam.setCamId(0)
+        cam_xout = self.pipeline.createXLinkOut()
+        cam_xout.setStreamName("preview")
+        cam.preview.link(cam_xout.input)
+
+        # NeuralNetwork
+        print("Creating Neural Network...")
+        nn = self.pipeline.createNeuralNetwork()
+        nn.setBlobPath(str(Path("models/face-detection-retail-0004/face-detection-retail-0004.blob").resolve().absolute()))
+        nn_xout = self.pipeline.createXLinkOut()
+        nn_xout.setStreamName("face_nn")
+        cam.preview.link(nn.input)
+        nn.out.link(nn_xout.input)
+        print("Pipeline created.")
+
+    def start_pipeline(self):
+        found, deviceInfo = depthai.XLinkConnection.getFirstDevice(depthai.X_LINK_UNBOOTED)
+        if not found:
+            raise RuntimeError("Device not found")
+        print("Device found.")
+        self.device = depthai.Device(deviceInfo)
+        print("Starting pipeline...")
+        self.device.startPipeline(self.pipeline)
+        self.preview = self.device.getOutputQueue("preview")
+        self.face_nn = self.device.getOutputQueue("face_nn")
 
     def run_face(self, frame):
         out = run_net(self.face_net, {"data": frame})
@@ -114,10 +151,9 @@ class Main:
             print(eye_pose)
 
     def run(self):
-        while self.cap.isOpened():
-            read_correctly, frame = self.cap.read()
-            if not read_correctly:
-                return
+        while True:
+            frame = np.array(self.preview.get().data).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             self.parse(frame)
 
@@ -126,7 +162,6 @@ class Main:
                 if cv2.waitKey(1) == ord('q'):
                     break
 
-        self.cap.release()
         cv2.destroyAllWindows()
 
 
