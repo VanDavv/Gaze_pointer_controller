@@ -10,13 +10,9 @@ import depthai
 debug = True
 
 
-def wait_for_results(queue, name: str):
+def wait_for_results(queue):
     start = datetime.now()
-    notif = datetime.now()
     while not queue.has():
-        if datetime.now() - notif > timedelta(microseconds=200):
-            print(f"Waiting for data in {name}...")
-            notif = datetime.now()
         if datetime.now() - start > timedelta(seconds=1):
             return False
     return True
@@ -101,6 +97,20 @@ class Main:
         land_nn_xout = self.pipeline.createXLinkOut()
         land_nn_xout.setStreamName("landmark_nn")
         land_nn.out.link(land_nn_xout.input)
+
+        # NeuralNetwork
+        print("Creating Head Pose Neural Network...")
+        pose_nn = self.pipeline.createNeuralNetwork()
+        pose_nn.setBlobPath(
+            str(Path("models/head-pose-estimation-adas-0001/head-pose-estimation-adas-0001.blob").resolve().absolute())
+        )
+        pose_nn_xin = self.pipeline.createXLinkIn()
+        pose_nn_xin.setStreamName("pose_in")
+        pose_nn_xin.out.link(pose_nn.input)
+        pose_nn_xout = self.pipeline.createXLinkOut()
+        pose_nn_xout.setStreamName("pose_nn")
+        pose_nn.out.link(pose_nn_xout.input)
+
         print("Pipeline created.")
 
     def start_pipeline(self):
@@ -115,12 +125,14 @@ class Main:
         self.face_nn = self.device.getOutputQueue("face_nn")
         self.land_in = self.device.getInputQueue("landmark_in")
         self.land_nn = self.device.getOutputQueue("landmark_nn")
+        self.pose_in = self.device.getInputQueue("pose_in")
+        self.pose_nn = self.device.getOutputQueue("pose_nn")
 
     def run_face(self, frame):
         buff = depthai.RawBuffer()
         buff.data = to_planar(frame, (300, 300))
         self.frame_in.send(buff)
-        has_results = wait_for_results(self.face_nn, "face_nn")
+        has_results = wait_for_results(self.face_nn)
         if not has_results:
             print("No data from face_nn, skipping frame...")
             return None
@@ -143,7 +155,7 @@ class Main:
         buff = depthai.RawBuffer()
         buff.data = to_planar(face_frame, (48, 48))
         self.land_in.send(buff)
-        has_results = wait_for_results(self.land_nn, "land_nn")
+        has_results = wait_for_results(self.land_nn)
         if not has_results:
             print("No data from land_nn, skipping frame...")
             return None, None, None
@@ -163,13 +175,25 @@ class Main:
         return left_eye_image, right_eye_image, nose
 
     def run_pose(self, face_frame, nose):
-        out = run_net(self.pose_net, {"data": face_frame})
-        head_pose = [value[0] for value in out.values()]
+        buff = depthai.RawBuffer()
+        buff.data = to_planar(face_frame, (60, 60))
+        self.pose_in.send(buff)
+        has_results = wait_for_results(self.pose_nn)
+        if not has_results:
+            print("No data from pose_nn, skipping frame...")
+            return None
 
-        if debug:
-            height, width = face_frame.shape[:2]
-            draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
-        return head_pose
+        raw = self.pose_nn.get()
+        out = to_nn_result(raw.data)
+        print("RAW", raw.data)
+        print("OUT", out)
+        return None
+        # head_pose = [value[0] for value in out.values()]
+        #
+        # if debug:
+        #     height, width = face_frame.shape[:2]
+        #     draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
+        # return head_pose
 
     def run_gaze(self, l_eye, r_eye, pose):
         out = run_net(self.gaze_net, {
@@ -198,7 +222,7 @@ class Main:
                 cv2.imshow("left_eye", left_eye)
                 cv2.imshow("right_eye", right_eye)
 
-        # pose = self.run_pose(face_image, nose)
+                pose = self.run_pose(face_image, nose)
         # if left_eye.size > 0 and right_eye.size > 0:
         #     eye_pose = self.run_gaze(left_eye, right_eye, pose)
         #     print(eye_pose)
