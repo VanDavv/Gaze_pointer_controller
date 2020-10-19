@@ -52,6 +52,10 @@ def to_bbox_result(raw_data: list):
     return arr
 
 
+def to_bytes_aligned(data: bytes):
+    return data + np.zeros(64 - len(data) % 64).tobytes()
+
+
 class Main:
     def __init__(self):
         print("Loading input...")
@@ -221,19 +225,19 @@ class Main:
         #     "right_eye_image": r_eye,
         #     "head_pose_angles": pose
         # })
-        data_left = np.array(to_planar(l_eye, (60, 60))).tobytes()
+        data_left = to_bytes_aligned(np.array(to_planar(l_eye, (60, 60))).tobytes())
         tensor_left = depthai.TensorInfo()
         tensor_left.name = "lefy_eye_image"
         tensor_left.dataType = depthai.TensorInfo.DataType.FP16
         tensor_left.offset = 0
 
-        data_right = np.array(to_planar(r_eye, (60, 60))).tobytes()
+        data_right = to_bytes_aligned(np.array(to_planar(r_eye, (60, 60))).tobytes())
         tensor_right = depthai.TensorInfo()
         tensor_right.name = "right_eye_image"
         tensor_right.dataType = depthai.TensorInfo.DataType.FP16
         tensor_right.offset = len(data_left)
 
-        data_pose = np.array(pose).tobytes()
+        data_pose = to_bytes_aligned(np.array(pose).tobytes())
         tensor_pose = depthai.TensorInfo()
         tensor_pose.name = "head_pose_angles"
         tensor_pose.dataType = depthai.TensorInfo.DataType.FP16
