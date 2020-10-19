@@ -32,21 +32,19 @@ def to_planar(arr: np.ndarray, shape: tuple) -> list:
     return [val for channel in cv2.resize(arr, shape).transpose(2, 0, 1) for y_col in channel for val in y_col]
 
 
-def to_nn_result(raw_data: list):
-    return np.frombuffer(bytes(raw_data), dtype=np.float16)
+def to_nn_result(nn_data):
+    return np.array(nn_data.getFirstLayerFp16())
 
 
 def to_tensor_result(packet):
-    bts = bytes(packet.data)
-    data = b''.join([
-        bts[tensor.offset:tensor.offset + sum(tensor.dims)]
-        for tensor in packet.tensors
-    ])
-    return np.frombuffer(data, dtype=np.float16)
+    return {
+        name: np.array(packet.getLayerFp16(name))
+        for name in [tensor.name for tensor in packet.getRaw().tensors]
+    }
 
 
-def to_bbox_result(raw_data: list):
-    arr = to_nn_result(raw_data)
+def to_bbox_result(nn_data):
+    arr = to_nn_result(nn_data)
     arr = arr[:np.where(arr == -1)[0][0]]
     arr = arr.reshape((arr.size // 7, 7))
     return arr
@@ -62,12 +60,6 @@ class Main:
         self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
         self.create_pipeline()
         self.start_pipeline()
-        # self.ie = IECore()
-        # print("Loading networks...")
-        # self.face_net = load_net(self.ie, Path("models/face-detection-retail-0004"))
-        # self.landmark_net = load_net(self.ie, Path("models/landmarks-regression-retail-0009"))
-        # self.pose_net = load_net(self.ie, Path("models/head-pose-estimation-adas-0001"))
-        # self.gaze_net = load_net(self.ie, Path("models/gaze-estimation-adas-0002"))
 
     def create_pipeline(self):
         print("Creating pipeline...")
@@ -157,14 +149,14 @@ class Main:
         self.gaze_nn = self.device.getOutputQueue("gaze_nn")
 
     def run_face(self, frame):
-        buff = depthai.RawBuffer()
-        buff.data = to_planar(frame, (300, 300))
-        self.frame_in.send(buff)
+        nn_data = depthai.NNData()
+        nn_data.setLayer("data", to_planar(frame, (300, 300)))
+        self.frame_in.send(nn_data)
         has_results = wait_for_results(self.face_nn)
         if not has_results:
             print("No data from face_nn, skipping frame...")
             return None
-        results = to_bbox_result(self.face_nn.get().data)
+        results = to_bbox_result(self.face_nn.get())
         height, width = frame.shape[:2]
         coords = [
             (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
@@ -180,15 +172,15 @@ class Main:
         return head_image
 
     def run_landmark(self, face_frame):
-        buff = depthai.RawBuffer()
-        buff.data = to_planar(face_frame, (48, 48))
-        self.land_in.send(buff)
+        nn_data = depthai.NNData()
+        nn_data.setLayer("0", to_planar(face_frame, (48, 48)))
+        self.land_in.send(nn_data)
         has_results = wait_for_results(self.land_nn)
         if not has_results:
             print("No data from land_nn, skipping frame...")
             return None, None, None
 
-        out = to_nn_result(self.land_nn.get().data)
+        out = to_nn_result(self.land_nn.get())
         right_eye, left_eye, nose = out[:2], out[2:4], out[4:6]
         h, w = face_frame.shape[:2]
 
@@ -203,15 +195,15 @@ class Main:
         return left_eye_image, right_eye_image, nose
 
     def run_pose(self, face_frame, nose):
-        buff = depthai.RawBuffer()
-        buff.data = to_planar(face_frame, (60, 60))
-        self.pose_in.send(buff)
+        nn_data = depthai.NNData()
+        nn_data.setLayer("data", to_planar(face_frame, (60, 60)))
+        self.pose_in.send(nn_data)
         has_results = wait_for_results(self.pose_nn)
         if not has_results:
             print("No data from pose_nn, skipping frame...")
             return None
 
-        head_pose = to_tensor_result(self.pose_nn.get())
+        head_pose = [val[0] for val in to_tensor_result(self.pose_nn.get()).values()]
 
         if debug:
             height, width = face_frame.shape[:2]
@@ -219,43 +211,17 @@ class Main:
         return head_pose
 
     def run_gaze(self, l_eye: np.ndarray, r_eye: np.ndarray, pose):
-        # pass
-        # out = run_net(self.gaze_net, {
-        #     "left_eye_image": l_eye,
-        #     "right_eye_image": r_eye,
-        #     "head_pose_angles": pose
-        # })
-        data_left = to_bytes_aligned(np.array(to_planar(l_eye, (60, 60))).tobytes())
-        tensor_left = depthai.TensorInfo()
-        tensor_left.name = "lefy_eye_image"
-        tensor_left.dataType = depthai.TensorInfo.DataType.FP16
-        tensor_left.offset = 0
-
-        data_right = to_bytes_aligned(np.array(to_planar(r_eye, (60, 60))).tobytes())
-        tensor_right = depthai.TensorInfo()
-        tensor_right.name = "right_eye_image"
-        tensor_right.dataType = depthai.TensorInfo.DataType.FP16
-        tensor_right.offset = len(data_left)
-
-        data_pose = to_bytes_aligned(np.array(pose).tobytes())
-        tensor_pose = depthai.TensorInfo()
-        tensor_pose.name = "head_pose_angles"
-        tensor_pose.dataType = depthai.TensorInfo.DataType.FP16
-        tensor_pose.offset = tensor_right.offset + len(data_right)
-
         nn_data = depthai.NNData()
-        nn_data.tensors = [
-            tensor_left,
-            tensor_right
-        ]
-        nn_data.data = list(data_left + data_right + data_pose)
+        nn_data.setLayer("lefy_eye_image", to_planar(l_eye, (60, 60)))
+        nn_data.setLayer("right_eye_image", to_planar(r_eye, (60, 60)))
+        nn_data.setLayer("head_pose_angles", pose)
         self.gaze_in.send(nn_data)
         has_results = wait_for_results(self.gaze_nn)
         if not has_results:
             print("No data from gaze_nn, skipping frame...")
             return None
 
-        gaze = to_nn_result(self.gaze_nn.get().data)
+        gaze = to_nn_result(self.gaze_nn.get())
 
         if debug:
             origin_x_re = r_eye.shape[1] // 2
