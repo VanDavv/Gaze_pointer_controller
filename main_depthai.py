@@ -53,7 +53,7 @@ def to_bbox_result(raw_data: list):
 
 
 def to_bytes_aligned(data: bytes):
-    return data + np.zeros(64 - len(data) % 64).tobytes()
+    return data + np.zeros(64 - len(data) % 64, dtype=np.float16).tobytes()
 
 
 class Main:
