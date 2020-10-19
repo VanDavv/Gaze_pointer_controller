@@ -36,6 +36,15 @@ def to_nn_result(raw_data: list):
     return np.frombuffer(bytes(raw_data), dtype=np.float16)
 
 
+def to_tensor_result(packet):
+    bts = bytes(packet.data)
+    data = b''.join([
+        bts[tensor.offset:tensor.offset + sum(tensor.dims)]
+        for tensor in packet.tensors
+    ])
+    return np.frombuffer(data, dtype=np.float16)
+
+
 def to_bbox_result(raw_data: list):
     arr = to_nn_result(raw_data)
     arr = arr[:np.where(arr == -1)[0][0]]
@@ -111,6 +120,19 @@ class Main:
         pose_nn_xout.setStreamName("pose_nn")
         pose_nn.out.link(pose_nn_xout.input)
 
+        # NeuralNetwork
+        print("Creating Gaze Estimation Neural Network...")
+        gaze_nn = self.pipeline.createNeuralNetwork()
+        gaze_nn.setBlobPath(
+            str(Path("models/gaze-estimation-adas-0002/gaze-estimation-adas-0002.blob").resolve().absolute())
+        )
+        gaze_nn_xin = self.pipeline.createXLinkIn()
+        gaze_nn_xin.setStreamName("gaze_in")
+        gaze_nn_xin.out.link(gaze_nn.input)
+        gaze_nn_xout = self.pipeline.createXLinkOut()
+        gaze_nn_xout.setStreamName("gaze_nn")
+        gaze_nn.out.link(gaze_nn_xout.input)
+
         print("Pipeline created.")
 
     def start_pipeline(self):
@@ -127,6 +149,8 @@ class Main:
         self.land_nn = self.device.getOutputQueue("landmark_nn")
         self.pose_in = self.device.getInputQueue("pose_in")
         self.pose_nn = self.device.getOutputQueue("pose_nn")
+        self.gaze_in = self.device.getInputQueue("gaze_in")
+        self.gaze_nn = self.device.getOutputQueue("gaze_nn")
 
     def run_face(self, frame):
         buff = depthai.RawBuffer()
@@ -183,24 +207,51 @@ class Main:
             print("No data from pose_nn, skipping frame...")
             return None
 
-        raw = self.pose_nn.get()
-        out = to_nn_result(raw.data)
-        print("RAW", raw.data)
-        print("OUT", out)
-        return None
-        # head_pose = [value[0] for value in out.values()]
-        #
-        # if debug:
-        #     height, width = face_frame.shape[:2]
-        #     draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
-        # return head_pose
+        head_pose = to_tensor_result(self.pose_nn.get())
 
-    def run_gaze(self, l_eye, r_eye, pose):
-        out = run_net(self.gaze_net, {
-            "left_eye_image": l_eye,
-            "right_eye_image": r_eye,
-            "head_pose_angles": pose
-        })
+        if debug:
+            height, width = face_frame.shape[:2]
+            draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
+        return head_pose
+
+    def run_gaze(self, l_eye: np.ndarray, r_eye: np.ndarray, pose):
+        # pass
+        # out = run_net(self.gaze_net, {
+        #     "left_eye_image": l_eye,
+        #     "right_eye_image": r_eye,
+        #     "head_pose_angles": pose
+        # })
+        data_left = np.array(to_planar(l_eye, (60, 60))).tobytes()
+        tensor_left = depthai.TensorInfo()
+        tensor_left.name = "lefy_eye_image"
+        tensor_left.dataType = depthai.TensorInfo.DataType.FP16
+        tensor_left.offset = 0
+
+        data_right = np.array(to_planar(r_eye, (60, 60))).tobytes()
+        tensor_right = depthai.TensorInfo()
+        tensor_right.name = "right_eye_image"
+        tensor_right.dataType = depthai.TensorInfo.DataType.FP16
+        tensor_right.offset = len(data_left)
+
+        data_pose = np.array(pose).tobytes()
+        tensor_pose = depthai.TensorInfo()
+        tensor_pose.name = "head_pose_angles"
+        tensor_pose.dataType = depthai.TensorInfo.DataType.FP16
+        tensor_pose.offset = tensor_right.offset + len(data_right)
+
+        nn_data = depthai.NNData()
+        nn_data.tensors = [
+            tensor_left,
+            tensor_right
+        ]
+        nn_data.data = list(data_left + data_right + data_pose)
+        self.gaze_in.send(nn_data)
+        has_results = wait_for_results(self.gaze_nn)
+        if not has_results:
+            print("No data from gaze_nn, skipping frame...")
+            return None
+
+        gaze = to_nn_result(self.gaze_nn.get().data)
 
         if debug:
             origin_x_re = r_eye.shape[1] // 2
@@ -208,24 +259,20 @@ class Main:
             origin_x_le = l_eye.shape[1] // 2
             origin_y_le = l_eye.shape[0] // 2
 
-            x, y = (out["gaze_vector"] * 100).astype(int)[:2]
+            x, y = (gaze * 100).astype(int)[:2]
             cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
             cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
-        return out["gaze_vector"]
+        return gaze
 
     def parse(self, frame):
         face_image = self.run_face(frame)
         if valid(face_image):
-            cv2.imshow("face", face_image)
             left_eye, right_eye, nose = self.run_landmark(face_image)
             if valid(left_eye, right_eye, nose):
-                cv2.imshow("left_eye", left_eye)
-                cv2.imshow("right_eye", right_eye)
-
                 pose = self.run_pose(face_image, nose)
-        # if left_eye.size > 0 and right_eye.size > 0:
-        #     eye_pose = self.run_gaze(left_eye, right_eye, pose)
-        #     print(eye_pose)
+                if valid(pose):
+                    eye_pose = self.run_gaze(left_eye, right_eye, pose)
+                    print(eye_pose)
 
     def run(self):
         while self.cap.isOpened():
@@ -242,6 +289,7 @@ class Main:
 
         self.cap.release()
         cv2.destroyAllWindows()
+        del self.device
 
 
 if __name__ == '__main__':
