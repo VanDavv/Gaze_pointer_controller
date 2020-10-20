@@ -1,10 +1,8 @@
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import cv2
 import numpy as np
-# from openvino.inference_engine import IENetwork, IECore
-from utils import draw_3d_axis
+from math import cos, sin
 import depthai
 
 debug = True
@@ -15,16 +13,6 @@ def wait_for_results(queue):
     while not queue.has():
         if datetime.now() - start > timedelta(seconds=1):
             return False
-    return True
-
-
-def valid(*args):
-    for arg in args:
-        if arg is None:
-            return False
-        if isinstance(arg, np.ndarray) and arg.size == 0:
-            return False
-
     return True
 
 
@@ -50,8 +38,43 @@ def to_bbox_result(nn_data):
     return arr
 
 
-def to_bytes_aligned(data: bytes):
-    return data + np.zeros(64 - len(data) % 64, dtype=np.float16).tobytes()
+def run_nn(x_in, x_out, in_dict):
+    nn_data = depthai.NNData()
+    for key in in_dict:
+        nn_data.setLayer(key, in_dict[key])
+    x_in.send(nn_data)
+    has_results = wait_for_results(x_out)
+    if not has_results:
+        raise RuntimeError("No data from nn!")
+    return x_out.get()
+
+
+def frame_norm(frame, *xy_vals):
+    height, width = frame.shape[:2]
+    return [int(val * width) if i % 2 == 0 else int(val * height) for i, val in enumerate(xy_vals)]
+
+
+def draw_3d_axis(image, head_pose, origin, size=50):
+    roll = head_pose[0] * np.pi / 180
+    pitch = head_pose[1] * np.pi / 180
+    yaw = -(head_pose[2] * np.pi / 180)
+
+    # X axis (red)
+    x1 = size * (cos(yaw) * cos(roll)) + origin[0]
+    y1 = size * (cos(pitch) * sin(roll) + cos(roll) * sin(pitch) * sin(yaw)) + origin[1]
+    cv2.line(image, (origin[0], origin[1]), (int(x1), int(y1)), (0, 0, 255), 3)
+
+    # Y axis (green)
+    x2 = size * (-cos(yaw) * sin(roll)) + origin[0]
+    y2 = size * (-cos(pitch) * cos(roll) - sin(pitch) * sin(yaw) * sin(roll)) + origin[1]
+    cv2.line(image, (origin[0], origin[1]), (int(x2), int(y2)), (0, 255, 0), 3)
+
+    # Z axis (blue)
+    x3 = size * (-sin(yaw)) + origin[0]
+    y3 = size * (cos(yaw) * sin(pitch)) + origin[1]
+    cv2.line(image, (origin[0], origin[1]), (int(x3), int(y3)), (255, 0, 0), 2)
+
+    return image
 
 
 class Main:
@@ -76,18 +99,16 @@ class Main:
         # cam_xout.setStreamName("preview")
         # cam.preview.link(cam_xout.input)
 
-        # FrameInput
-        frame_in = self.pipeline.createXLinkIn()
-        frame_in.setStreamName("frame_in")
 
-        
         # NeuralNetwork
         print("Creating Face Detection Neural Network...")
+        face_in = self.pipeline.createXLinkIn()
+        face_in.setStreamName("face_in")
         face_nn = self.pipeline.createNeuralNetwork()
         face_nn.setBlobPath(str(Path("models/face-detection-retail-0004/face-detection-retail-0004.blob").resolve().absolute()))
         face_nn_xout = self.pipeline.createXLinkOut()
         face_nn_xout.setStreamName("face_nn")
-        frame_in.out.link(face_nn.input)
+        face_in.out.link(face_nn.input)
         face_nn.out.link(face_nn_xout.input)
         
         # NeuralNetwork
@@ -139,7 +160,7 @@ class Main:
         self.device = depthai.Device(deviceInfo)
         print("Starting pipeline...")
         self.device.startPipeline(self.pipeline)
-        self.frame_in = self.device.getInputQueue("frame_in")
+        self.face_in = self.device.getInputQueue("face_in")
         self.face_nn = self.device.getOutputQueue("face_nn")
         self.land_in = self.device.getInputQueue("landmark_in")
         self.land_nn = self.device.getOutputQueue("landmark_nn")
@@ -148,112 +169,105 @@ class Main:
         self.gaze_in = self.device.getInputQueue("gaze_in")
         self.gaze_nn = self.device.getOutputQueue("gaze_nn")
 
-    def run_face(self, frame):
-        nn_data = depthai.NNData()
-        nn_data.setLayer("data", to_planar(frame, (300, 300)))
-        self.frame_in.send(nn_data)
-        has_results = wait_for_results(self.face_nn)
-        if not has_results:
-            print("No data from face_nn, skipping frame...")
-            return None
-        results = to_bbox_result(self.face_nn.get())
-        height, width = frame.shape[:2]
-        coords = [
-            (int(obj[3] * width), int(obj[4] * height), int(obj[5] * width), int(obj[6] * height))
+    def full_frame_cords(self, cords):
+        original_cords = self.face_coords[0]
+        return [
+            original_cords[0 if i % 2 == 0 else 1] + val
+            for i, val in enumerate(cords)
+        ]
+
+    def full_frame_bbox(self, bbox):
+        relative_cords = self.full_frame_cords(bbox)
+        result_frame = self.frame[relative_cords[1]:relative_cords[3], relative_cords[0]:relative_cords[2]]
+        return result_frame, relative_cords
+
+    def draw_bbox(self, bbox, color):
+        cv2.rectangle(self.debug_frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+
+    def run_face(self):
+        nn_data = run_nn(self.face_in, self.face_nn, {"data": to_planar(self.frame, (300, 300))})
+        results = to_bbox_result(nn_data)
+        self.face_coords = [
+            frame_norm(self.frame, *obj[3:7])
             for obj in results
             if obj[2] > 0.4
         ]
-        if len(coords) == 0:
-            return None
-        head_image = frame[coords[0][1]:coords[0][3], coords[0][0]:coords[0][2]]
+        if len(self.face_coords) == 0:
+            return False
+        self.face_frame = self.frame[
+            self.face_coords[0][1]:self.face_coords[0][3],
+            self.face_coords[0][0]:self.face_coords[0][2]
+        ]
         if debug:
-            for obj in coords:
-                cv2.rectangle(frame, (obj[0], obj[1]), (obj[2], obj[3]), (10, 245, 10), 2)
-        return head_image
+            for bbox in self.face_coords:
+                self.draw_bbox(bbox, (10, 245, 10))
+        return True
 
-    def run_landmark(self, face_frame):
-        nn_data = depthai.NNData()
-        nn_data.setLayer("0", to_planar(face_frame, (48, 48)))
-        self.land_in.send(nn_data)
-        has_results = wait_for_results(self.land_nn)
-        if not has_results:
-            print("No data from land_nn, skipping frame...")
-            return None, None, None
+    def run_landmark(self):
+        nn_data = run_nn(self.land_in, self.land_nn, {"0": to_planar(self.face_frame, (48, 48))})
+        out = frame_norm(self.face_frame, *to_nn_result(nn_data))
+        raw_left, raw_right, raw_nose = out[:2], out[2:4], out[4:6]
 
-        out = to_nn_result(self.land_nn.get())
-        right_eye, left_eye, nose = out[:2], out[2:4], out[4:6]
-        h, w = face_frame.shape[:2]
-
-        right_eye_image = face_frame[int(right_eye[1]*h) - 30:int(right_eye[1]*h) + 30, int(right_eye[0]*w) - 30:int(right_eye[0]*w) + 30]
-        left_eye_image = face_frame[int(left_eye[1]*h) - 30:int(left_eye[1]*h) + 30, int(left_eye[0]*w) - 30:int(left_eye[0]*w) + 30]
-
-        if debug:
-            cv2.circle(face_frame, (int(nose[0] * w), int(nose[1] * h)), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
-            cv2.rectangle(face_frame, (int(right_eye[0] * w - 30), int(right_eye[1] * h - 30)), (int(right_eye[0] * w + 30), int(right_eye[1] * h + 30)), 245, 2)
-            cv2.rectangle(face_frame, (int(left_eye[0] * w - 30), int(left_eye[1] * h - 30)), (int(left_eye[0] * w + 30), int(left_eye[1] * h + 30)), 245, 2)
-
-        return left_eye_image, right_eye_image, nose
-
-    def run_pose(self, face_frame, nose):
-        nn_data = depthai.NNData()
-        nn_data.setLayer("data", to_planar(face_frame, (60, 60)))
-        self.pose_in.send(nn_data)
-        has_results = wait_for_results(self.pose_nn)
-        if not has_results:
-            print("No data from pose_nn, skipping frame...")
-            return None
-
-        head_pose = [val[0] for val in to_tensor_result(self.pose_nn.get()).values()]
+        self.left_eye_image, self.left_eye_bbox = self.full_frame_bbox([
+            raw_left[0] - 30, raw_left[1] - 30, raw_left[0] + 30, raw_left[1] + 30
+        ])
+        self.right_eye_image, self.right_eye_bbox = self.full_frame_bbox([
+            raw_right[0] - 30, raw_right[1] - 30, raw_right[0] + 30, raw_right[1] + 30
+        ])
+        self.nose = self.full_frame_cords(raw_nose)
 
         if debug:
-            height, width = face_frame.shape[:2]
-            draw_3d_axis(face_frame, head_pose[2], head_pose[1], head_pose[0], int(nose[0] * width), int(nose[1] * height))
-        return head_pose
+            cv2.circle(self.debug_frame, (self.nose[0], self.nose[1]), 2, (0, 255, 0), thickness=5, lineType=8, shift=0)
+            self.draw_bbox(self.right_eye_bbox, (245, 10, 10))
+            self.draw_bbox(self.left_eye_bbox, (245, 10, 10))
 
-    def run_gaze(self, l_eye: np.ndarray, r_eye: np.ndarray, pose):
-        nn_data = depthai.NNData()
-        nn_data.setLayer("lefy_eye_image", to_planar(l_eye, (60, 60)))
-        nn_data.setLayer("right_eye_image", to_planar(r_eye, (60, 60)))
-        nn_data.setLayer("head_pose_angles", pose)
-        self.gaze_in.send(nn_data)
-        has_results = wait_for_results(self.gaze_nn)
-        if not has_results:
-            print("No data from gaze_nn, skipping frame...")
-            return None
+    def run_pose(self):
+        nn_data = run_nn(self.pose_in, self.pose_nn, {"data": to_planar(self.face_frame, (60, 60))})
 
-        gaze = to_nn_result(self.gaze_nn.get())
+        self.pose = [val[0] for val in to_tensor_result(nn_data).values()]
 
         if debug:
-            origin_x_re = r_eye.shape[1] // 2
-            origin_y_re = r_eye.shape[0] // 2
-            origin_x_le = l_eye.shape[1] // 2
-            origin_y_le = l_eye.shape[0] // 2
+            draw_3d_axis(self.debug_frame, self.pose, self.nose)
 
-            x, y = (gaze * 100).astype(int)[:2]
-            cv2.arrowedLine(l_eye, (origin_x_le, origin_y_le), (origin_x_le + x, origin_y_le - y), (255, 0, 255), 3)
-            cv2.arrowedLine(r_eye, (origin_x_re, origin_y_re), (origin_x_re + x, origin_y_re - y), (255, 0, 255), 3)
-        return gaze
+    def run_gaze(self):
+        nn_data = run_nn(self.gaze_in, self.gaze_nn, {
+            "lefy_eye_image": to_planar(self.left_eye_image, (60, 60)),
+            "right_eye_image": to_planar(self.right_eye_image, (60, 60)),
+            "head_pose_angles": self.pose,
+        })
 
-    def parse(self, frame):
-        face_image = self.run_face(frame)
-        if valid(face_image):
-            left_eye, right_eye, nose = self.run_landmark(face_image)
-            if valid(left_eye, right_eye, nose):
-                pose = self.run_pose(face_image, nose)
-                if valid(pose):
-                    eye_pose = self.run_gaze(left_eye, right_eye, pose)
-                    print(eye_pose)
+        self.gaze = to_nn_result(nn_data)
+
+        if debug:
+            re_x = (self.right_eye_bbox[0] + self.right_eye_bbox[2]) // 2
+            re_y = (self.right_eye_bbox[1] + self.right_eye_bbox[3]) // 2
+            le_x = (self.left_eye_bbox[0] + self.left_eye_bbox[2]) // 2
+            le_y = (self.left_eye_bbox[1] + self.left_eye_bbox[3]) // 2
+
+            x, y = (self.gaze * 100).astype(int)[:2]
+            cv2.arrowedLine(self.debug_frame, (le_x, le_y), (le_x + x, le_y - y), (255, 0, 255), 3)
+            cv2.arrowedLine(self.debug_frame, (re_x, re_y), (re_x + x, re_y - y), (255, 0, 255), 3)
+
+    def parse(self):
+        face_success = self.run_face()
+        if face_success:
+            self.run_landmark()
+            self.run_pose()
+            self.run_gaze()
+            print(self.gaze)
 
     def run(self):
         while self.cap.isOpened():
-            read_correctly, frame = self.cap.read()
+            read_correctly, self.frame = self.cap.read()
             if not read_correctly:
                 break
+            if debug:
+                self.debug_frame = self.frame.copy()
 
-            self.parse(frame)
+            self.parse()
 
             if debug:
-                cv2.imshow("Camera_view", cv2.resize(frame, (900, 450)))
+                cv2.imshow("Camera_view", cv2.resize(self.debug_frame, (900, 450)))
                 if cv2.waitKey(1) == ord('q'):
                     break
 
