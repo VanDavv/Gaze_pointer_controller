@@ -7,7 +7,7 @@ from math import cos, sin
 import depthai
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-nd', '--no-debug', default=True, action="store_false", help="Prevent debug output")
+parser.add_argument('-nd', '--no-debug', action="store_true", help="Prevent debug output")
 parser.add_argument('-cam', '--camera', type=int, help="Camera ID to be used for inference (conflicts with -vid)")
 parser.add_argument('-vid', '--video', type=str, help="Path to video file to be used for inference (conflicts with -cam)")
 args = parser.parse_args()
@@ -63,7 +63,13 @@ def run_nn(x_in, x_out, in_dict):
 
 def frame_norm(frame, *xy_vals):
     height, width = frame.shape[:2]
-    return [int(val * width) if i % 2 == 0 else int(val * height) for i, val in enumerate(xy_vals)]
+    result = []
+    for i, val in enumerate(xy_vals):
+        if i % 2 == 0:
+            result.append(max(0, min(width, int(val * width))))
+        else:
+            result.append(max(0, min(height, int(val * height))))
+    return result
 
 
 def draw_3d_axis(image, head_pose, origin, size=50):
