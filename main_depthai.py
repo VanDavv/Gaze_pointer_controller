@@ -1,3 +1,4 @@
+import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
 import cv2
@@ -5,7 +6,18 @@ import numpy as np
 from math import cos, sin
 import depthai
 
-debug = True
+parser = argparse.ArgumentParser()
+parser.add_argument('-nd', '--no-debug', default=True, action="store_false", help="Prevent debug output")
+parser.add_argument('-cam', '--camera', type=int, help="Camera ID to be used for inference (conflicts with -vid)")
+parser.add_argument('-vid', '--video', type=str, help="Path to video file to be used for inference (conflicts with -cam)")
+args = parser.parse_args()
+
+debug = not args.no_debug
+
+if args.camera and args.video:
+    raise ValueError("Incorrect command line parameters! \"-cam\" cannot be used with \"-vid\"!")
+elif args.camera is None and args.video is None:
+    raise ValueError("Missing inference source! Either use \"-cam <cam_id>\" to run on DepthAI camera or \"-vid <path>\" to run on video file")
 
 
 def wait_for_results(queue):
@@ -302,5 +314,7 @@ class Main:
 
 
 if __name__ == '__main__':
-    # Main(file="./demo.mp4").run()
-    Main(camera=0).run()
+    if args.video:
+        Main(file=args.video).run()
+    else:
+        Main(camera=args.camera).run()
