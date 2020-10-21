@@ -78,26 +78,28 @@ def draw_3d_axis(image, head_pose, origin, size=50):
 
 
 class Main:
-    def __init__(self):
-        print("Loading input...")
-        self.cap = cv2.VideoCapture(str(Path("demo.mp4").resolve().absolute()))
+    def __init__(self, file=None, camera=None):
+        print("Loading pipeline...")
+        self.file = file
+        self.camera = camera
         self.create_pipeline()
         self.start_pipeline()
 
     def create_pipeline(self):
         print("Creating pipeline...")
         self.pipeline = depthai.Pipeline()
-        
-        # ColorCamera
-        # print("Creating Color Camera...")
-        # cam = self.pipeline.createColorCamera()
-        # cam.setPreviewSize(300, 300)
-        # cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        # cam.setInterleaved(False)
-        # cam.setCamId(0)
-        # cam_xout = self.pipeline.createXLinkOut()
-        # cam_xout.setStreamName("preview")
-        # cam.preview.link(cam_xout.input)
+
+        if self.camera is not None:
+            # ColorCamera
+            print("Creating Color Camera...")
+            cam = self.pipeline.createColorCamera()
+            cam.setPreviewSize(300, 300)
+            cam.setResolution(depthai.ColorCameraProperties.SensorResolution.THE_1080_P)
+            cam.setInterleaved(False)
+            cam.setCamId(self.camera)
+            cam_xout = self.pipeline.createXLinkOut()
+            cam_xout.setStreamName("cam_out")
+            cam.preview.link(cam_xout.input)
 
 
         # NeuralNetwork
@@ -153,11 +155,7 @@ class Main:
         print("Pipeline created.")
 
     def start_pipeline(self):
-        found, deviceInfo = depthai.XLinkConnection.getFirstDevice(depthai.X_LINK_UNBOOTED)
-        if not found:
-            raise RuntimeError("Device not found")
-        print("Device found.")
-        self.device = depthai.Device(deviceInfo)
+        self.device = depthai.Device()
         print("Starting pipeline...")
         self.device.startPipeline(self.pipeline)
         self.face_in = self.device.getInputQueue("face_in")
@@ -168,6 +166,8 @@ class Main:
         self.pose_nn = self.device.getOutputQueue("pose_nn")
         self.gaze_in = self.device.getInputQueue("gaze_in")
         self.gaze_nn = self.device.getOutputQueue("gaze_nn")
+        if self.camera is not None:
+            self.cam_out = self.device.getOutputQueue("cam_out")
 
     def full_frame_cords(self, cords):
         original_cords = self.face_coords[0]
@@ -178,7 +178,12 @@ class Main:
 
     def full_frame_bbox(self, bbox):
         relative_cords = self.full_frame_cords(bbox)
-        result_frame = self.frame[relative_cords[1]:relative_cords[3], relative_cords[0]:relative_cords[2]]
+        height, width = self.frame.shape[:2]
+        y_min = max(0, relative_cords[1])
+        y_max = min(height, relative_cords[3])
+        x_min = max(0, relative_cords[0])
+        x_max = min(width, relative_cords[2])
+        result_frame = self.frame[y_min:y_max, x_min:x_max]
         return result_frame, relative_cords
 
     def draw_bbox(self, bbox, color):
@@ -249,6 +254,9 @@ class Main:
             cv2.arrowedLine(self.debug_frame, (re_x, re_y), (re_x + x, re_y - y), (255, 0, 255), 3)
 
     def parse(self):
+        if debug:
+            self.debug_frame = self.frame.copy()
+
         face_success = self.run_face()
         if face_success:
             self.run_landmark()
@@ -256,25 +264,43 @@ class Main:
             self.run_gaze()
             print(self.gaze)
 
-    def run(self):
-        while self.cap.isOpened():
-            read_correctly, self.frame = self.cap.read()
+        if debug:
+            cv2.imshow("Camera_view", cv2.resize(self.debug_frame, (900, 450)))
+            if cv2.waitKey(1) == ord('q'):
+                cv2.destroyAllWindows()
+                raise StopIteration()
+
+    def run_video(self):
+        cap = cv2.VideoCapture(str(Path(self.file).resolve().absolute()))
+        while cap.isOpened():
+            read_correctly, self.frame = cap.read()
             if not read_correctly:
                 break
-            if debug:
-                self.debug_frame = self.frame.copy()
 
-            self.parse()
+            try:
+                self.parse()
+            except StopIteration:
+                break
 
-            if debug:
-                cv2.imshow("Camera_view", cv2.resize(self.debug_frame, (900, 450)))
-                if cv2.waitKey(1) == ord('q'):
-                    break
+        cap.release()
 
-        self.cap.release()
-        cv2.destroyAllWindows()
+    def run_camera(self):
+        while True:
+            self.frame = np.array(self.cam_out.get().getData()).reshape((3, 300, 300)).transpose(1, 2, 0).astype(np.uint8)
+            try:
+                self.parse()
+            except StopIteration:
+                break
+
+
+    def run(self):
+        if self.file is not None:
+            self.run_video()
+        else:
+            self.run_camera()
         del self.device
 
 
 if __name__ == '__main__':
-    Main().run()
+    # Main(file="./demo.mp4").run()
+    Main(camera=0).run()
